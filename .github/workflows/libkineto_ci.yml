@@ -38,7 +38,6 @@ jobs:
         echo GITHUB_REF        = $GITHUB_REF
         c++ --verbose
 
-    # TODO: Figure out how to install cupti headers T84637671
     - name: Build static lib
       run: |
         set -e
@@ -53,4 +52,100 @@ jobs:
         mkdir build_shared
         cd build_shared
         cmake -DKINETO_LIBRARY_TYPE=shared ../libkineto/
+        make -j
+
+  build_cuda:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        cuda_version: [11.3]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Checkout submodules
+      shell: bash
+      run: |
+        auth_header="$(git config --local --get http.https://github.com/.extraheader)"
+        git submodule sync --recursive
+        git -c "http.extraheader=$auth_header" -c protocol.version=2 submodule update --init --force --recursive --depth=1
+
+    - name: Install CUDA
+      shell: bash
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
+        sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        # https://forums.developer.nvidia.com/t/notice-cuda-linux-repository-key-rotation/212772
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.0-1_all.deb
+        sudo dpkg -i cuda-keyring_1.0-1_all.deb
+        # sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
+        sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+        sudo apt-get update
+        # "11.5 -> 11-5"
+        cuda_apt_version=$(echo "${{ matrix.cuda_version }}" | sed "s/\./-/")
+        sudo apt-get -y install cuda-minimal-build-${cuda_apt_version} cuda-libraries-dev-${cuda_apt_version} libcupti-dev
+ 
+    - name: Build static lib
+      run: |
+        set -e
+        mkdir build_static
+        cd build_static
+
+        set -x
+        ls /usr/local/cuda
+        ls /usr/local/cuda/include
+        ls /usr/local/cuda/extras/CUPTI/include
+
+        cmake -DKINETO_LIBRARY_TYPE=static ../libkineto/ -DCUDA_SOURCE_DIR=/usr/local/cuda
+        make -j
+
+    - name: Build shared lib
+      run: |
+        set -e
+        mkdir build_shared
+        cd build_shared
+        cmake -DKINETO_LIBRARY_TYPE=shared ../libkineto/ -DCUDA_SOURCE_DIR=/usr/local/cuda
+        make -j
+
+  build_rocm:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        rocm_version: [5.1.1]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Checkout submodules
+      shell: bash
+      run: |
+        auth_header="$(git config --local --get http.https://github.com/.extraheader)"
+        git submodule sync --recursive
+        git -c "http.extraheader=$auth_header" -c protocol.version=2 submodule update --init --force --recursive --depth=1
+
+    - name: Install ROCm
+      shell: bash
+      run: |
+        rocm_apt_version="50101-1"
+        sudo update-alternatives --install /usr/bin/python python /usr/bin/python3 10
+        wget https://repo.radeon.com/amdgpu-install/22.10.1/ubuntu/focal/amdgpu-install_22.10.1.${rocm_apt_version}_all.deb
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt install -y ./amdgpu-install_22.10.1.${rocm_apt_version}_all.deb
+        amdgpu-install -y --usecase=hiplibsdk,rocm --no-dkms
+        sudo rm amdgpu-install_22.10.1.${rocm_apt_version}_all.deb
+
+    - name: Build static lib
+      run: |
+        set -e
+        mkdir build_static
+        cd build_static
+        cmake -DKINETO_LIBRARY_TYPE=static ../libkineto/ -DROCM_SOURCE_DIR=/opt/rocm
+        make -j
+
+    - name: Build shared lib
+      run: |
+        set -e
+        mkdir build_shared
+        cd build_shared
+        cmake -DKINETO_LIBRARY_TYPE=shared ../libkineto/ -DROCM_SOURCE_DIR=/opt/rocm
         make -j
